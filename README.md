@@ -27,10 +27,15 @@ architecture** on local Parquet:
 git clone <this repo> && cd convicts-dilemma
 uv sync                                                          # 1. install everything
 uv run pytest                                                    # 2. sanity check (29 tests)
-uv run dagster asset materialize --select "*" -m convicts_dilemma.defs   # 3. full pipeline
+uv run dagster asset materialize -m convicts_dilemma.defs \
+  --select "bronze_tournament,silver_rounds,int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index,run_catalog,cross_run_summary"   # 3. full pipeline
 uv sync --group analysis
 uv run jupyter lab notebooks/analysis.ipynb                      # 4. explore the results
 ```
+
+(The explicit asset list is used instead of `--select "*"` because Click
+expands `*` against the filesystem on Windows. On PowerShell, replace the
+`\` line continuation with a backtick.)
 
 Step 3 plays a complete 10-strategy tournament (55 matches × 2000 rounds),
 writes Bronze, enriches Silver with Polars, and builds + tests the Gold dbt
@@ -135,8 +140,11 @@ You can also materialize the **whole pipeline end-to-end** (new tournament
 → Silver → Gold + tests) in one command:
 
 ```bash
-uv run dagster asset materialize --select "*" -m convicts_dilemma.defs
+uv run dagster asset materialize -m convicts_dilemma.defs \
+  --select "bronze_tournament,silver_rounds,int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index,run_catalog,cross_run_summary"
 ```
+
+(`--select "*"` would be shorter but Click expands `*` on Windows.)
 
 ### 5. Add LLM agents to the tournament (optional, needs Ollama)
 

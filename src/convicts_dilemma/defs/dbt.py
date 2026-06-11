@@ -24,9 +24,11 @@ dbt_project = DbtProject(project_dir=REPO_ROOT / "dbt")
 dbt_project.prepare_if_dev()
 
 # `dagster dev` prepares the manifest automatically; for one-shot CLI
-# materialisations (and pytest) parse it on demand.
-if not dbt_project.manifest_path.exists():
-    DbtCliResource(project_dir=dbt_project).cli(["parse"]).wait()
+# materialisations from a cold clone, generate it on demand. (Not via
+# DbtCliResource.cli(["parse"]): that writes to a unique per-invocation
+# target path, not the manifest_path read by @dbt_assets.)
+if not dbt_project.manifest_path.exists() and dbt_project.preparer:
+    dbt_project.preparer.prepare(dbt_project)
 
 
 class LakeTranslator(DagsterDbtTranslator):
