@@ -2,6 +2,6 @@
 
 import dagster as dg
 
-from convicts_dilemma.defs.assets import bronze_tournament
+from convicts_dilemma.defs.assets import bronze_tournament, silver_rounds
 
-defs = dg.Definitions(assets=[bronze_tournament])
+defs = dg.Definitions(assets=[bronze_tournament, silver_rounds])

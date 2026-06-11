@@ -26,8 +26,8 @@ architecture** on local Parquet:
 | Stage | Status |
 |---|---|
 | Bronze — tournament generation + raw Parquet | ✅ done |
-| Silver — Polars enrichment | 🚧 next |
-| Gold — dbt-duckdb aggregate models | 🚧 planned |
+| Silver — Polars enrichment | ✅ done |
+| Gold — dbt-duckdb aggregate models | 🚧 next |
 | Ollama LLM agents | 🚧 planned |
 | Multi-run comparison + EDA notebook | 🚧 planned |
 
@@ -82,7 +82,19 @@ Every materialisation creates a **new immutable snapshot** under a fresh
 `run_id` — previous runs are never overwritten. Re-running with the same
 seed and parameters reproduces the exact same actions and payoffs.
 
-### 3. Query the lake (analyst access)
+### 3. Enrich the rounds (Silver)
+
+```bash
+uv run dagster asset materialize --select silver_rounds -m convicts_dilemma.defs
+```
+
+(or materialize it from the Dagster UI). The Silver transform is
+**incremental and idempotent**: it processes exactly the Bronze runs that
+have no Silver partition yet, so you can re-run it any time. The rolling
+window (default 50 rounds) and the drift bucket size (default 100) are
+exposed as run config.
+
+### 4. Query the lake (analyst access)
 
 ```python
 import duckdb
@@ -104,19 +116,33 @@ duckdb.sql("""
 
 ```
 data/                                   # git-ignored, regenerated locally
-└── bronze/
-    ├── manifests/
-    │   └── run_id=<ts>-<uuid>/manifest.parquet   # 1 row: seed, rounds, roster,
-    │                                             # payoff matrix, timestamp
+├── bronze/
+│   ├── manifests/
+│   │   └── run_id=<ts>-<uuid>/manifest.parquet   # 1 row: seed, rounds, roster,
+│   │                                             # payoff matrix, timestamp
+│   └── rounds/
+│       └── run_id=<ts>-<uuid>/
+│           └── match_id=<n>/rounds.parquet       # 1 row per round
+└── silver/
     └── rounds/
-        └── run_id=<ts>-<uuid>/
-            └── match_id=<n>/rounds.parquet       # 1 row per round
+        └── run_id=<ts>-<uuid>/rounds.parquet     # 2 rows per round (player-centric)
 ```
 
-Rounds schema: `player_a`, `player_b`, `round`, `action_a`, `action_b`
-(`"C"`/`"D"`), `payoff_a`, `payoff_b`, `cumulative_a`, `cumulative_b`,
-`reasoning_a`, `reasoning_b` (LLM justification, null for coded strategies).
-`run_id` and `match_id` come from the Hive partition paths.
+**Bronze rounds** (match-centric): `player_a`, `player_b`, `round`,
+`action_a`, `action_b` (`"C"`/`"D"`), `payoff_a`, `payoff_b`,
+`cumulative_a`, `cumulative_b`, `reasoning_a`, `reasoning_b` (LLM
+justification, null for coded strategies). `run_id` and `match_id` come
+from the Hive partition paths.
+
+**Silver rounds** (player-centric, one row per player per round): keys
+`match_id`, `round`, `player_slot`; identity `player`, `opponent`; facts
+`action`, `opponent_action`, `payoff`, `cumulative_score`, `reasoning`;
+derived features `cooperated`, `betrayed`, `mutual_cooperation`,
+`mutual_defection`, `prev_action`, `prev_opponent_action` (1-round memory),
+`coop_rate_so_far` (expanding), `rolling_coop_rate` (last 50 rounds),
+`defections_so_far`, `forgave` (cooperated right after being betrayed),
+`retaliated` (defected right after being betrayed), `round_bucket`
+(1, 101, 201... — behavioural-drift grain).
 
 This per-`run_id` partitioning is the project's **versioned data lake**
 answer: each run is an isolated snapshot, manifests make runs discoverable

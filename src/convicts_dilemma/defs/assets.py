@@ -9,6 +9,11 @@ import dagster as dg
 
 from convicts_dilemma.config import PayoffMatrix
 from convicts_dilemma.pipeline.bronze import write_bronze
+from convicts_dilemma.pipeline.silver import (
+    DEFAULT_BUCKET_SIZE,
+    DEFAULT_ROLLING_WINDOW,
+    transform_pending,
+)
 from convicts_dilemma.simulation.tournament import TournamentConfig, run_tournament
 from convicts_dilemma.strategies import DEFAULT_ROSTER
 
@@ -75,5 +80,45 @@ def bronze_tournament(
             "n_rows": dg.MetadataValue.int(int(summary["n_rows"])),  # type: ignore[arg-type]
             "rounds_path": dg.MetadataValue.path(str(summary["rounds_path"])),
             "manifest_path": dg.MetadataValue.path(str(summary["manifest_path"])),
+        }
+    )
+
+
+class SilverConfig(dg.Config):
+    """Tunable enrichment parameters of the Silver transform."""
+
+    rolling_window: int = DEFAULT_ROLLING_WINDOW
+    bucket_size: int = DEFAULT_BUCKET_SIZE
+
+
+@dg.asset(
+    deps=[bronze_tournament],
+    group_name="silver",
+    kinds={"polars", "parquet"},
+    description=(
+        "Cleaned, player-centric, feature-enriched rounds built with Polars. "
+        "Unpivots Bronze into two rows per round (one per player perspective) "
+        "and adds windowed features: 1-round memory, expanding/rolling "
+        "cooperation rates, forgiveness and retaliation flags, round buckets. "
+        "Incremental: only Bronze runs without a Silver partition are "
+        "processed, so re-materialising never duplicates data."
+    ),
+)
+def silver_rounds(
+    context: dg.AssetExecutionContext, config: SilverConfig
+) -> dg.MaterializeResult:
+    """Transform every pending Bronze run into the Silver layer."""
+    summaries = transform_pending(
+        rolling_window=config.rolling_window, bucket_size=config.bucket_size
+    )
+    for summary in summaries:
+        context.log.info("Silver written for run %s: %s rows", summary["run_id"], summary["n_rows"])
+    if not summaries:
+        context.log.info("No pending Bronze runs — Silver already up to date.")
+    return dg.MaterializeResult(
+        metadata={
+            "processed_runs": dg.MetadataValue.json([s["run_id"] for s in summaries]),
+            "n_runs": dg.MetadataValue.int(len(summaries)),
+            "n_rows": dg.MetadataValue.int(sum(int(s["n_rows"]) for s in summaries)),  # type: ignore[arg-type]
         }
     )
