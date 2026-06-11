@@ -54,3 +54,5 @@ Asset configs (seed, rounds, roster, payoff matrix, LLM settings) are passed via
 - Tests never require a live Ollama server: agents take a `client_factory` seam and tests stub it (`tests/test_agents.py`). Keep it that way so the grader's `uv run pytest` passes without Ollama.
 - Manifest schema changes must bump `ENGINE_VERSION` in `simulation/tournament.py`; old runs with a different manifest schema break cross-run scans (regenerate `data/` — it is disposable by design).
 - Windows console: set `PYTHONIOENCODING=utf-8` before printing DuckDB tables (cp1252 can't encode the box-drawing characters).
+- pytest uses a **project-local basetemp** (`.pytest_tmp/`, set via `addopts`): the default `%TEMP%\pytest-of-<user>` dir caused `PermissionError` when created by a different security context (sandboxed shell vs the user's shell). Don't remove that addopts line.
+- Anything pivoting Gold data per run must build labels that include the **run_id**, not just the config (seed/payoff): several runs can share an identical configuration (see the `run_label` cell in `notebooks/analysis.ipynb`).

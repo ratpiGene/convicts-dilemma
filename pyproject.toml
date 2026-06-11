@@ -35,3 +35,7 @@ module_name = "convicts_dilemma.defs"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Project-local tmp_path root: avoids PermissionError when the shared
+# %TEMP%\pytest-of-<user> dir was created by another security context
+# (sandboxed shells, elevated runs...). Wiped by pytest on each session.
+addopts = "--basetemp=.pytest_tmp"
