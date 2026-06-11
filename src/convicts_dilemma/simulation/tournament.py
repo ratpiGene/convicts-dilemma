@@ -24,7 +24,8 @@ from convicts_dilemma.strategies import DEFAULT_ROSTER, create_strategy
 
 #: Schema/engine revision, recorded in every manifest so future schema
 #: changes can be told apart when comparing old and new runs.
-ENGINE_VERSION = 1
+#: v2: manifest gained llm_n_rounds + ollama_model; llm_raw JSONL added.
+ENGINE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,11 @@ class TournamentConfig:
         payoff: Payoff matrix for every match of the run.
         include_self_play: Whether each strategy also plays against a copy
             of itself (as in Axelrod's original tournament).
+        llm_n_rounds: Round count for any match involving an LLM agent
+            (a 3B model needs ~1s per decision, so full-length matches
+            would take hours; 100 rounds keeps an LLM-augmented tournament
+            in the minutes range).
+        ollama_model: Model tag used by every LLM agent of the run.
     """
 
     strategies: tuple[str, ...] = DEFAULT_ROSTER
@@ -47,16 +53,24 @@ class TournamentConfig:
     seed: int = 42
     payoff: PayoffMatrix = field(default_factory=PayoffMatrix)
     include_self_play: bool = True
+    llm_n_rounds: int = 100
+    ollama_model: str = "llama3.2:3b"
 
 
 @dataclass(frozen=True)
 class MatchResult:
-    """All rounds of one pairing, plus who played."""
+    """All rounds of one pairing, plus who played.
+
+    ``llm_raw`` holds the raw decision provenance of LLM players (one list
+    per slot, ``{"a": [...], "b": [...]}``), or ``None`` when neither
+    player is an LLM agent.
+    """
 
     match_id: int
     player_a: str
     player_b: str
     rounds: list[dict[str, Any]]
+    llm_raw: dict[str, list[dict[str, Any]]] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,10 +114,24 @@ def run_tournament(config: TournamentConfig) -> TournamentResult:
     pairings = schedule_pairings(config.strategies, config.include_self_play)
     matches: list[MatchResult] = []
     for match_id, (name_a, name_b) in enumerate(pairings):
-        player_a = create_strategy(name_a, random.Random(f"{config.seed}:{match_id}:a"))
-        player_b = create_strategy(name_b, random.Random(f"{config.seed}:{match_id}:b"))
-        rounds = play_match(player_a, player_b, config.n_rounds, config.payoff)
-        matches.append(MatchResult(match_id, name_a, name_b, rounds))
+        player_a = create_strategy(
+            name_a, random.Random(f"{config.seed}:{match_id}:a"), ollama_model=config.ollama_model
+        )
+        player_b = create_strategy(
+            name_b, random.Random(f"{config.seed}:{match_id}:b"), ollama_model=config.ollama_model
+        )
+        is_llm_match = player_a.is_llm or player_b.is_llm
+        n_rounds = config.llm_n_rounds if is_llm_match else config.n_rounds
+        rounds = play_match(player_a, player_b, n_rounds, config.payoff)
+
+        llm_raw: dict[str, list[dict[str, Any]]] | None = None
+        if is_llm_match:
+            llm_raw = {
+                slot: list(getattr(player, "raw_records", []))
+                for slot, player in (("a", player_a), ("b", player_b))
+                if player.is_llm
+            }
+        matches.append(MatchResult(match_id, name_a, name_b, rounds, llm_raw))
 
     manifest = {
         "run_id": run_id,
@@ -111,6 +139,8 @@ def run_tournament(config: TournamentConfig) -> TournamentResult:
         "engine_version": ENGINE_VERSION,
         "seed": config.seed,
         "n_rounds": config.n_rounds,
+        "llm_n_rounds": config.llm_n_rounds,
+        "ollama_model": config.ollama_model,
         "n_matches": len(matches),
         "strategies": list(config.strategies),
         "include_self_play": config.include_self_play,

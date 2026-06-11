@@ -15,9 +15,11 @@ from convicts_dilemma.strategies.classic import (
 )
 
 
-def test_registry_has_ten_strategies():
-    assert len(REGISTRY) == 10
-    assert DEFAULT_ROSTER == tuple(REGISTRY)
+def test_default_roster_is_the_ten_coded_strategies():
+    assert len(DEFAULT_ROSTER) == 10
+    # REGISTRY may also hold the lazily-registered LLM personas.
+    assert set(DEFAULT_ROSTER) <= set(REGISTRY)
+    assert all(not REGISTRY[name].is_llm for name in DEFAULT_ROSTER)
 
 
 def test_create_strategy_unknown_name_lists_options():

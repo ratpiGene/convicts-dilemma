@@ -27,12 +27,15 @@ class Strategy(ABC):
     Attributes:
         name: Stable snake_case identifier, used in the dataset and the
             strategy registry (e.g. ``"tit_for_tat"``).
+        is_llm: True for LLM-backed agents; the tournament gives those
+            matches a shorter, dedicated round count (``llm_n_rounds``).
         last_reasoning: Free-text justification of the **last** decision.
             ``None`` for coded strategies; LLM agents fill it after each
             call so the engine can record it in the Bronze layer.
     """
 
     name: ClassVar[str]
+    is_llm: ClassVar[bool] = False
 
     def __init__(self, rng: random.Random | None = None) -> None:
         """Create a player for one match.

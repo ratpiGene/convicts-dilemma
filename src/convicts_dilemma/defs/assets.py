@@ -33,6 +33,10 @@ class TournamentRunConfig(dg.Config):
     payoff_temptation: int = 5
     payoff_sucker: int = 0
     payoff_punishment: int = 1
+    # LLM agents (opt-in): add e.g. "llm_empathetic" to `strategies`.
+    # Requires a running Ollama server with `ollama_model` pulled.
+    llm_n_rounds: int = 100
+    ollama_model: str = "llama3.2:3b"
 
     def to_domain(self) -> TournamentConfig:
         """Convert to the plain domain config used by the simulation."""
@@ -47,6 +51,8 @@ class TournamentRunConfig(dg.Config):
                 sucker=self.payoff_sucker,
                 punishment=self.payoff_punishment,
             ),
+            llm_n_rounds=self.llm_n_rounds,
+            ollama_model=self.ollama_model,
         )
 
 

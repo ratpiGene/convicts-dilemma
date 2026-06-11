@@ -5,7 +5,10 @@ Layout (under the data root, see :func:`convicts_dilemma.config.data_root`):
 ```
 bronze/
 ├── manifests/run_id=<id>/manifest.parquet      # 1 row: the run parameters
-└── rounds/run_id=<id>/match_id=<n>/rounds.parquet
+├── rounds/run_id=<id>/match_id=<n>/rounds.parquet
+└── llm_raw/run_id=<id>/match_id=<n>/decisions.jsonl   # LLM provenance:
+        # one line per LLM decision (slot, prompt, raw response, latency,
+        # fallback flag). Only written for matches involving an LLM agent.
 ```
 
 Design notes:
@@ -20,6 +23,7 @@ Design notes:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import polars as pl
@@ -54,6 +58,11 @@ def bronze_manifests_dir(root: Path | None = None) -> Path:
     return (root or data_root()) / "bronze" / "manifests"
 
 
+def bronze_llm_raw_dir(root: Path | None = None) -> Path:
+    """Directory holding the raw LLM decision logs (JSONL provenance)."""
+    return (root or data_root()) / "bronze" / "llm_raw"
+
+
 def write_bronze(result: TournamentResult, root: Path | None = None) -> dict[str, object]:
     """Write one tournament run to the Bronze layer.
 
@@ -73,7 +82,9 @@ def write_bronze(result: TournamentResult, root: Path | None = None) -> dict[str
     manifest_df.write_parquet(manifest_path)
 
     n_rows = 0
+    n_llm_decisions = 0
     rounds_run_dir = bronze_rounds_dir(root) / run_partition
+    llm_raw_run_dir = bronze_llm_raw_dir(root) / run_partition
     for match in result.matches:
         match_df = pl.DataFrame(
             [
@@ -87,10 +98,20 @@ def write_bronze(result: TournamentResult, root: Path | None = None) -> dict[str
         match_df.write_parquet(match_path)
         n_rows += len(match_df)
 
+        if match.llm_raw:
+            jsonl_path = llm_raw_run_dir / f"match_id={match.match_id}" / "decisions.jsonl"
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            with jsonl_path.open("w", encoding="utf-8") as handle:
+                for slot, records in sorted(match.llm_raw.items()):
+                    for record in records:
+                        handle.write(json.dumps({"slot": slot, **record}) + "\n")
+                        n_llm_decisions += 1
+
     return {
         "run_id": result.run_id,
         "n_matches": len(result.matches),
         "n_rows": n_rows,
+        "n_llm_decisions": n_llm_decisions,
         "rounds_path": str(rounds_run_dir),
         "manifest_path": str(manifest_path),
     }

@@ -28,8 +28,8 @@ architecture** on local Parquet:
 | Bronze — tournament generation + raw Parquet | ✅ done |
 | Silver — Polars enrichment | ✅ done |
 | Gold — dbt-duckdb aggregate models | ✅ done |
-| Ollama LLM agents | 🚧 next |
-| Multi-run comparison + EDA notebook | 🚧 planned |
+| Ollama LLM agents | ✅ done |
+| Multi-run comparison + EDA notebook | 🚧 next |
 
 ## Setup
 
@@ -126,7 +126,50 @@ You can also materialize the **whole pipeline end-to-end** (new tournament
 uv run dagster asset materialize --select "*" -m convicts_dilemma.defs
 ```
 
-### 5. Query the lake (analyst access)
+### 5. Add LLM agents to the tournament (optional, needs Ollama)
+
+Four LLM personas are available: `llm_empathetic`, `llm_calculating`,
+`llm_vengeful`, `llm_opportunist`. They implement the same `Strategy`
+interface as the coded roster — the engine doesn't know the difference.
+
+One-time setup:
+
+```bash
+# install Ollama: https://ollama.com/download (or: winget install -e --id Ollama.Ollama)
+ollama pull llama3.2:3b     # ~2 GB; a 3B q4 model fits in 4 GB of VRAM
+ollama serve                # if the server isn't already running
+```
+
+Then add personas to the roster via the run config:
+
+```bash
+uv run dagster asset materialize --select bronze_tournament -m convicts_dilemma.defs `
+  --config-json '{"ops": {"bronze_tournament": {"config": {"strategies": ["tit_for_tat", "always_defect", "grim_trigger", "llm_empathetic", "llm_calculating", "llm_vengeful", "llm_opportunist"], "llm_n_rounds": 100}}}}'
+```
+
+How it works:
+
+- Decisions are forced into JSON `{"action": "C"|"D", "reason": "..."}` via
+  Ollama's **structured outputs**; the `reason` fills the `reasoning_*`
+  columns in Bronze.
+- The prompt is **compact**: opponent's last 10 moves + cooperation rates +
+  last round, never the full transcript, and never the match length (avoids
+  end-game defection by backward induction).
+- Matches involving an LLM play `llm_n_rounds` rounds (default 100) instead
+  of `n_rounds` — a 3B model takes ~1-4 s per decision on a 4 GB GPU, so
+  budget a few minutes per LLM match (start with one or two personas, or
+  lower `llm_n_rounds`, before launching the full 4-persona roster).
+- Every LLM call is logged to `data/bronze/llm_raw/.../decisions.jsonl`
+  (prompt, raw response, latency, fallback flag): the raw provenance zone
+  of the generative part.
+- If the server is unreachable or replies garbage, the agent **falls back
+  to tit-for-tat** for that round and flags it — a tournament never crashes
+  mid-run.
+- Set `ollama_model` in the run config (or `CONVICTS_OLLAMA_MODEL`) to use
+  another model. LLM runs are reproducible best-effort only (a fixed seed
+  is sent, but determinism across GPUs/Ollama versions is not guaranteed).
+
+### 6. Query the lake (analyst access)
 
 ```python
 import duckdb
@@ -151,10 +194,14 @@ data/                                   # git-ignored, regenerated locally
 ├── bronze/
 │   ├── manifests/
 │   │   └── run_id=<ts>-<uuid>/manifest.parquet   # 1 row: seed, rounds, roster,
-│   │                                             # payoff matrix, timestamp
-│   └── rounds/
+│   │                                             # payoff matrix, model, timestamp
+│   ├── rounds/
+│   │   └── run_id=<ts>-<uuid>/
+│   │       └── match_id=<n>/rounds.parquet       # 1 row per round
+│   └── llm_raw/
 │       └── run_id=<ts>-<uuid>/
-│           └── match_id=<n>/rounds.parquet       # 1 row per round
+│           └── match_id=<n>/decisions.jsonl      # raw LLM provenance (prompt,
+│                                                 # response, latency, fallback)
 ├── silver/
 │   └── rounds/
 │       └── run_id=<ts>-<uuid>/rounds.parquet     # 2 rows per round (player-centric)
@@ -200,6 +247,10 @@ by their parameters, and comparing runs is a partition-filtered query.
 | `pavlov` | Win-stay / lose-shift |
 | `joss` | Tit for tat that sneaks a defection 10% of the time |
 | `random` | Coin flip every round |
+| `llm_empathetic` | LLM persona: trusting, seeks mutual benefit, quick to forgive |
+| `llm_calculating` | LLM persona: cold expected-value maximiser |
+| `llm_vengeful` | LLM persona: cooperative until crossed, punishes hard |
+| `llm_opportunist` | LLM persona: exploits naive opponents when it looks safe |
 
 ## Reproducibility
 
