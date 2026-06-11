@@ -1,0 +1,32 @@
+[project]
+name = "convicts-dilemma"
+version = "0.1.0"
+description = "Iterated prisoner's dilemma tournament with a full ETL/ELT pipeline (Bronze/Silver/Gold on Parquet, Dagster + Polars + dbt-duckdb)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dagster>=1.13.8",
+    "dagster-dbt>=0.29.8",
+    "dagster-webserver>=1.13.8",
+    "dbt-duckdb>=1.10.1",
+    "duckdb>=1.5.3",
+    "polars>=1.41.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/convicts_dilemma"]
+
+[tool.dagster]
+module_name = "convicts_dilemma.defs"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
