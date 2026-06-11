@@ -1,0 +1,24 @@
+# dbt project for the Gold layer.
+#
+# Reads the Silver Parquet lake as external DuckDB sources and materialises
+# analysis-ready aggregates. Gold models use dbt-duckdb's `external`
+# materialisation: each model is written as a Parquet file under
+# <data root>/gold/ AND registered as a view in the gold.duckdb database,
+# so analysts can use either entry point.
+name: convicts_dilemma
+version: "1.0.0"
+profile: convicts_dilemma
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+
+models:
+  convicts_dilemma:
+    intermediate:
+      # Re-usable per-match grain shared by tournament_summary and
+      # matchup_matrix; a view in the DuckDB file, not exported to Parquet.
+      +materialized: view
+    gold:
+      +materialized: external

@@ -1,0 +1,14 @@
+# Local DuckDB profile — no secrets, committed on purpose so the project
+# is replicable from a clone with zero manual configuration.
+#
+# Paths are relative to this directory (dbt always runs with cwd = dbt/,
+# both via Dagster and via the README's `cd dbt` instructions). Override
+# with an ABSOLUTE CONVICTS_DATA_DIR to relocate the lake.
+convicts_dilemma:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('CONVICTS_DATA_DIR', '../data') }}/gold/gold.duckdb"
+      external_root: "{{ env_var('CONVICTS_DATA_DIR', '../data') }}/gold"
+      threads: 4

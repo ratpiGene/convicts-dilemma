@@ -1,0 +1,65 @@
+version: 2
+
+models:
+  - name: tournament_summary
+    description: >
+      Final leaderboard of each run: one row per (run_id, player) with
+      total score, average score per round, cooperation rate, win/loss
+      record and rank within the run.
+    columns:
+      - name: run_id
+        description: Tournament snapshot identifier (Hive partition value).
+        data_tests: [not_null]
+      - name: player
+        description: Strategy name from the registry.
+        data_tests: [not_null]
+      - name: total_score
+        data_tests: [not_null]
+      - name: coop_rate
+        description: Average in-match cooperation rate across all matches.
+        data_tests: [not_null, is_rate]
+      - name: rank
+        description: 1 = best total score within the run.
+        data_tests: [not_null]
+
+  - name: matchup_matrix
+    description: >
+      Cross-confrontation table, one row per (run_id, player, opponent),
+      with average final scores on both sides. Pivot player x opponent on
+      player_score for the classic Axelrod heatmap.
+    columns:
+      - name: run_id
+        data_tests: [not_null]
+      - name: player
+        data_tests: [not_null]
+      - name: opponent
+        data_tests: [not_null]
+      - name: player_coop_rate
+        data_tests: [is_rate]
+
+  - name: behavioral_drift
+    description: >
+      Cooperation rate per (run_id, player, round_bucket) where buckets
+      are 100-round slices (1-100, 101-200...). Detects behavioural
+      switches over the course of matches.
+    columns:
+      - name: round_bucket
+        description: First round of the bucket (1, 101, 201...).
+        data_tests: [not_null]
+      - name: coop_rate
+        data_tests: [not_null, is_rate]
+      - name: mutual_coop_rate
+        data_tests: [is_rate]
+
+  - name: forgiveness_index
+    description: >
+      Per (run_id, player), how the strategy responds in the round
+      immediately following an opponent defection: forgiveness (back to
+      cooperation) vs retaliation. forgiveness_rate is null for players
+      never betrayed.
+    columns:
+      - name: forgiveness_rate
+        data_tests: [is_rate]
+      - name: betrayal_responses
+        description: forgiveness_events + retaliation_events.
+        data_tests: [not_null]

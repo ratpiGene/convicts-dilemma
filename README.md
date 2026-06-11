@@ -27,8 +27,8 @@ architecture** on local Parquet:
 |---|---|
 | Bronze — tournament generation + raw Parquet | ✅ done |
 | Silver — Polars enrichment | ✅ done |
-| Gold — dbt-duckdb aggregate models | 🚧 next |
-| Ollama LLM agents | 🚧 planned |
+| Gold — dbt-duckdb aggregate models | ✅ done |
+| Ollama LLM agents | 🚧 next |
 | Multi-run comparison + EDA notebook | 🚧 planned |
 
 ## Setup
@@ -94,7 +94,39 @@ have no Silver partition yet, so you can re-run it any time. The rolling
 window (default 50 rounds) and the drift bucket size (default 100) are
 exposed as run config.
 
-### 4. Query the lake (analyst access)
+### 4. Build the Gold aggregates (dbt)
+
+Through Dagster (recommended — also runs the 16 dbt data tests as asset
+checks):
+
+```bash
+uv run dagster asset materialize -m convicts_dilemma.defs `
+  --select "int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index"
+```
+
+Or with dbt directly:
+
+```bash
+mkdir data/gold      # first time only: DuckDB doesn't create parent dirs
+cd dbt
+uv run dbt build     # models + data tests
+uv run dbt docs generate   # optional: browsable docs + lineage graph
+```
+
+The four Gold tables (`tournament_summary`, `matchup_matrix`,
+`behavioral_drift`, `forgiveness_index`) contain **aggregates only** — no
+raw rows. Each is materialised twice by dbt-duckdb's `external` strategy:
+as a Parquet file under `data/gold/` and as a view in
+`data/gold/gold.duckdb`.
+
+You can also materialize the **whole pipeline end-to-end** (new tournament
+→ Silver → Gold + tests) in one command:
+
+```bash
+uv run dagster asset materialize --select "*" -m convicts_dilemma.defs
+```
+
+### 5. Query the lake (analyst access)
 
 ```python
 import duckdb
@@ -123,9 +155,15 @@ data/                                   # git-ignored, regenerated locally
 │   └── rounds/
 │       └── run_id=<ts>-<uuid>/
 │           └── match_id=<n>/rounds.parquet       # 1 row per round
-└── silver/
-    └── rounds/
-        └── run_id=<ts>-<uuid>/rounds.parquet     # 2 rows per round (player-centric)
+├── silver/
+│   └── rounds/
+│       └── run_id=<ts>-<uuid>/rounds.parquet     # 2 rows per round (player-centric)
+└── gold/
+    ├── gold.duckdb                               # dbt target db (views over the parquet)
+    ├── tournament_summary.parquet                # aggregates only, all runs,
+    ├── matchup_matrix.parquet                    # one row per (run_id, ...)
+    ├── behavioral_drift.parquet
+    └── forgiveness_index.parquet
 ```
 
 **Bronze rounds** (match-centric): `player_a`, `player_b`, `round`,

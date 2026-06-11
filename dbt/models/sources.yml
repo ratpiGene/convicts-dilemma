@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: lake
+    description: >
+      The local Parquet data lake produced by the Dagster pipeline.
+      Tables are mapped onto Hive-partitioned Parquet globs via
+      dbt-duckdb's external_location, so dbt never copies the data.
+    schema: main
+    tables:
+      - name: silver_rounds
+        description: >
+          Player-centric enriched rounds (two rows per round, one per
+          player perspective), all runs. Produced by the silver_rounds
+          Dagster asset with Polars.
+        meta:
+          external_location: "read_parquet('{{ env_var('CONVICTS_DATA_DIR', '../data') }}/silver/rounds/*/*.parquet', hive_partitioning=true)"
+      - name: bronze_manifests
+        description: >
+          One row per tournament run: seed, rounds, roster, payoff matrix,
+          timestamp. The discovery index of the versioned lake.
+        meta:
+          external_location: "read_parquet('{{ env_var('CONVICTS_DATA_DIR', '../data') }}/bronze/manifests/*/*.parquet', hive_partitioning=true)"
