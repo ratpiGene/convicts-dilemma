@@ -4,7 +4,7 @@ A complete data-engineering pipeline around a simulation of the **iterated
 prisoner's dilemma** (Axelrod's 1981 tournament), built for the Ynov M2
 "Outils ETL (& ELT)" course.
 
-Coded strategies (and later, local LLM agents via Ollama) play a round-robin
+Coded strategies and local LLM agents (via Ollama) play a round-robin
 tournament. Every round is recorded and flows through a **medallion
 architecture** on local Parquet:
 
@@ -21,15 +21,22 @@ architecture** on local Parquet:
 
 **Stack**: Python 3.13 · [uv](https://docs.astral.sh/uv/) · Dagster · Polars · DuckDB · dbt-duckdb · Parquet
 
-## Project status
+## Quickstart (full replication)
 
-| Stage | Status |
-|---|---|
-| Bronze — tournament generation + raw Parquet | ✅ done |
-| Silver — Polars enrichment | ✅ done |
-| Gold — dbt-duckdb aggregate models | ✅ done |
-| Ollama LLM agents | ✅ done |
-| Multi-run comparison + EDA notebook | 🚧 next |
+```bash
+git clone <this repo> && cd convicts-dilemma
+uv sync                                                          # 1. install everything
+uv run pytest                                                    # 2. sanity check (29 tests)
+uv run dagster asset materialize --select "*" -m convicts_dilemma.defs   # 3. full pipeline
+uv sync --group analysis
+uv run jupyter lab notebooks/analysis.ipynb                      # 4. explore the results
+```
+
+Step 3 plays a complete 10-strategy tournament (55 matches × 2000 rounds),
+writes Bronze, enriches Silver with Polars, and builds + tests the Gold dbt
+models — about 30 seconds end to end. Re-run it (optionally with different
+config, see below) to add more snapshots to the lake. LLM agents are
+opt-in and need [Ollama](https://ollama.com) (step 5 below).
 
 ## Setup
 
@@ -96,12 +103,12 @@ exposed as run config.
 
 ### 4. Build the Gold aggregates (dbt)
 
-Through Dagster (recommended — also runs the 16 dbt data tests as asset
+Through Dagster (recommended — also runs the 24 dbt data tests as asset
 checks):
 
 ```bash
 uv run dagster asset materialize -m convicts_dilemma.defs `
-  --select "int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index"
+  --select "int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index,run_catalog,cross_run_summary"
 ```
 
 Or with dbt directly:
@@ -113,11 +120,16 @@ uv run dbt build     # models + data tests
 uv run dbt docs generate   # optional: browsable docs + lineage graph
 ```
 
-The four Gold tables (`tournament_summary`, `matchup_matrix`,
-`behavioral_drift`, `forgiveness_index`) contain **aggregates only** — no
+The Gold tables (`tournament_summary`, `matchup_matrix`,
+`behavioral_drift`, `forgiveness_index`, plus the multi-run views
+`run_catalog` and `cross_run_summary`) contain **aggregates only** — no
 raw rows. Each is materialised twice by dbt-duckdb's `external` strategy:
 as a Parquet file under `data/gold/` and as a view in
 `data/gold/gold.duckdb`.
+
+> Note: if you ever add or rename dbt models, refresh Dagster's cached dbt
+> manifest with `cd dbt && uv run dbt parse` (or just use `dagster dev`,
+> which re-parses automatically).
 
 You can also materialize the **whole pipeline end-to-end** (new tournament
 → Silver → Gold + tests) in one command:
@@ -169,7 +181,19 @@ How it works:
   another model. LLM runs are reproducible best-effort only (a fixed seed
   is sent, but determinism across GPUs/Ollama versions is not guaranteed).
 
-### 6. Query the lake (analyst access)
+### 6. Explore: the EDA notebook
+
+```bash
+uv sync --group analysis          # adds matplotlib + jupyterlab
+uv run jupyter lab notebooks/analysis.ipynb
+```
+
+The notebook consumes the **Gold layer only** (as a data analyst would):
+leaderboard, matchup heatmap, behavioural drift, forgiveness-vs-performance,
+cross-run rank comparison, and a discussion of the Nash equilibrium vs the
+emergence of cooperation. It adapts to whatever runs exist in your lake.
+
+### 7. Query the lake (analyst access)
 
 ```python
 import duckdb
@@ -210,7 +234,9 @@ data/                                   # git-ignored, regenerated locally
     ├── tournament_summary.parquet                # aggregates only, all runs,
     ├── matchup_matrix.parquet                    # one row per (run_id, ...)
     ├── behavioral_drift.parquet
-    └── forgiveness_index.parquet
+    ├── forgiveness_index.parquet
+    ├── run_catalog.parquet                       # 1 row per run: all parameters
+    └── cross_run_summary.parquet                 # leaderboards joined with run params
 ```
 
 **Bronze rounds** (match-centric): `player_a`, `player_b`, `round`,
@@ -229,9 +255,67 @@ derived features `cooperated`, `betrayed`, `mutual_cooperation`,
 `retaliated` (defected right after being betrayed), `round_bucket`
 (1, 101, 201... — behavioural-drift grain).
 
-This per-`run_id` partitioning is the project's **versioned data lake**
-answer: each run is an isolated snapshot, manifests make runs discoverable
-by their parameters, and comparing runs is a partition-filtered query.
+## The versioned data lake ("aller plus loin")
+
+The per-`run_id` partitioning answers the three questions of the spec:
+
+**How is each run identified and isolated?** Every materialisation creates
+a `run_id` = `<UTC timestamp>-<short uuid>` (sortable + collision-proof)
+and writes under fresh `run_id=...` directories — append-only snapshots,
+previous runs are never touched. The one-row **manifest** records the full
+configuration (seed, rounds, roster, payoff matrix, LLM model, engine
+schema version), exposed to analysts as the `run_catalog` Gold table.
+
+**How are snapshots stored without duplication?** A run's data exists
+exactly once, under its partition. Nothing is copied between layers either:
+Silver reads Bronze and dbt reads Silver as zero-copy external Parquet
+sources. The Silver transform is incremental (only runs missing from
+Silver are processed), and Gold tables are cheap aggregates keyed by
+`run_id`.
+
+**How to query one run, or compare runs?** Hive partitioning makes
+`run_id` a queryable column with partition pruning:
+
+```sql
+-- one specific run
+SELECT * FROM 'data/gold/tournament_summary.parquet' WHERE run_id = '...';
+
+-- find runs by their parameters, then compare them
+SELECT * FROM 'data/gold/cross_run_summary.parquet'
+WHERE run_id IN (
+    SELECT run_id FROM 'data/gold/run_catalog.parquet'
+    WHERE payoff_temptation IN (5, 10) AND n_rounds = 2000
+)
+ORDER BY player, created_at;
+```
+
+The `cross_run_summary` model pre-joins every leaderboard with its run's
+parameters — "does tit_for_tat still win when betrayal pays double (T=10)?"
+is a one-liner.
+
+## Architecture choices
+
+| Choice | Why |
+|---|---|
+| Medallion Bronze/Silver/Gold | Raw events are never mutated (replayable); enrichment and aggregates are rebuildable from below; Gold contains aggregates only, per the spec |
+| Parquet + Hive partitioning | Columnar, compressed, partition pruning; `run_id` in the path is the snapshot mechanism |
+| Dagster | Software-defined assets map 1:1 onto the medallion layers; lineage, run config and dbt tests visible in one UI |
+| Polars (Silver) | Lazy, fast window expressions (`shift`, `cum_sum`, `rolling_mean` `.over(...)`) are exactly the derived-column workload |
+| dbt-duckdb (Gold) | SQL aggregates with data tests + generated docs; DuckDB reads the Parquet lake in place, zero copies |
+| DuckDB (serving) | The analyst endpoint: one `duckdb` import queries every layer |
+| Strategy interface | Coded strategies and Ollama agents are interchangeable players; the pipeline is agnostic to who decides |
+
+```
+src/convicts_dilemma/
+├── strategies/   # Strategy interface + 10 coded Axelrod strategies
+├── agents/       # Ollama LLM personas (same interface)
+├── simulation/   # match engine + seeded round-robin tournament
+├── pipeline/     # bronze.py (write/scan), silver.py (Polars transform)
+└── defs/         # Dagster assets incl. dagster-dbt integration
+dbt/              # Gold models, data tests, sources over the Parquet lake
+notebooks/        # EDA notebook (Gold-only consumption)
+tests/            # 29 pytest tests (engine, layers, agents, dbt end-to-end)
+```
 
 ## The strategies
 

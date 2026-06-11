@@ -51,6 +51,33 @@ models:
       - name: mutual_coop_rate
         data_tests: [is_rate]
 
+  - name: run_catalog
+    description: >
+      One row per tournament run with all its parameters (seed, rounds,
+      roster, payoff matrix, LLM model). The discovery index of the
+      versioned lake.
+    columns:
+      - name: run_id
+        data_tests: [not_null, unique]
+      - name: seed
+        data_tests: [not_null]
+      - name: created_at
+        data_tests: [not_null]
+
+  - name: cross_run_summary
+    description: >
+      tournament_summary joined with run parameters — strategy performance
+      across runs, for comparing how ranks shift with the configuration.
+    columns:
+      - name: run_id
+        data_tests: [not_null]
+      - name: player
+        data_tests: [not_null]
+      - name: rank
+        data_tests: [not_null]
+      - name: coop_rate
+        data_tests: [is_rate]
+
   - name: forgiveness_index
     description: >
       Per (run_id, player), how the strategy responds in the round

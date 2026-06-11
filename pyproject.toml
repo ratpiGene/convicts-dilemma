@@ -15,6 +15,10 @@ dependencies = [
 ]
 
 [dependency-groups]
+analysis = [
+    "jupyterlab>=4.5.8",
+    "matplotlib>=3.10.9",
+]
 dev = [
     "pytest>=9.0.3",
 ]
