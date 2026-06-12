@@ -19,6 +19,11 @@ analysis = [
     "jupyterlab>=4.5.8",
     "matplotlib>=3.10.9",
 ]
+dashboard = [
+    "pandas>=2.3",
+    "plotly>=6.0",
+    "streamlit>=1.49",
+]
 dev = [
     "pytest>=9.0.3",
 ]

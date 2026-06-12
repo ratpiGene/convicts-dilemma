@@ -23,6 +23,14 @@ uv run dagster asset materialize -m convicts_dilemma.defs \
 # dbt directly (cwd must be dbt/ — profiles.yml lives there):
 cd dbt && uv run dbt build
 
+# Populate the lake with 12 heterogeneous runs (Bronze+Silver+Gold, ~1 min):
+uv run python scripts/populate_lake.py        # --dry-run to preview the plan
+uv run python scripts/populate_lake.py --llm-only   # LLM persona face-off (needs Ollama, ~10-25 min)
+
+# Streamlit dashboard (Gold-only consumer, like the notebook):
+uv sync --group dashboard
+uv run streamlit run app/dashboard.py
+
 # EDA notebook:
 uv sync --group analysis
 uv run jupyter lab notebooks/analysis.ipynb
@@ -40,6 +48,8 @@ Asset configs (seed, rounds, roster, payoff matrix, LLM settings) are passed via
 
 **Determinism contract**: all randomness goes through per-player `random.Random` instances seeded with the string `"{seed}:{match_id}:{slot}"` (string seeding is stable across processes/versions; tuples are not accepted and `hash()` is not stable). Same config ⇒ byte-identical dataset. LLM runs are best-effort only (a fixed Ollama seed is sent).
 
+**Gold consumers**: the Streamlit dashboard (`app/dashboard.py`), the EDA notebook and ad-hoc DuckDB SQL all read **Gold aggregates only** — never Bronze/Silver rows. Round-level questions get a new dbt model, not a raw scan in a consumer. `scripts/populate_lake.py` holds the curated heterogeneous experiment plan (documented in `docs/data_scientist_guide.md`); it writes Bronze/Silver via direct function calls and shells out to `dbt build` for Gold.
+
 **Dagster wiring**: `defs/assets.py` holds `bronze_tournament` and `silver_rounds`; `defs/dbt.py` exposes the dbt models via `@dbt_assets` with a custom `DagsterDbtTranslator` mapping dbt *sources* back onto the upstream asset keys (`silver_rounds`, `bronze_tournament`) so the UI shows one unbroken lineage. dbt data tests surface as Dagster asset checks. `[tool.dagster]` in pyproject points at `convicts_dilemma.defs`.
 
 **Lazy LLM registration**: `strategies/__init__.py` must NOT import `agents` at module top (circular import — agents import `strategies.base`, which executes the package init). Personas are merged into `REGISTRY` lazily via `_register_llm_agents()` / a PEP 562 `__getattr__` for `LLM_ROSTER`.
@@ -54,5 +64,6 @@ Asset configs (seed, rounds, roster, payoff matrix, LLM settings) are passed via
 - Tests never require a live Ollama server: agents take a `client_factory` seam and tests stub it (`tests/test_agents.py`). Keep it that way so the grader's `uv run pytest` passes without Ollama.
 - Manifest schema changes must bump `ENGINE_VERSION` in `simulation/tournament.py`; old runs with a different manifest schema break cross-run scans (regenerate `data/` — it is disposable by design).
 - Windows console: set `PYTHONIOENCODING=utf-8` before printing DuckDB tables (cp1252 can't encode the box-drawing characters).
+- **Ollama must NOT use this laptop's AMD iGPU** (hybrid Ryzen 9 6900HS + RTX 3050 4 GB). Ollama 0.30.7 ships a Vulkan backend that discovers the Radeon iGPU and the scheduler *prefers it* over CUDA because its shared memory looks bigger (≈16 GB vs 4 GB) — `ollama ps` then shows a reassuring but misleading "100% GPU". On that Vulkan/iGPU path `llama3.2:3b` generates `@@@@…` garbage (surfacing as `Unexpected empty grammar stack` errors in structured-output mode and as tit-for-tat fallbacks in tournaments) while some other models (qwen2.5:3b, llama3.2:1b) happen to work. **Fix applied 2026-06-12**: user env var `OLLAMA_VULKAN=0` (via `setx`) + Ollama app restart — CUDA/RTX 3050 is then the only GPU and llama3.2:3b runs clean at ~80% offload. To verify the device, don't trust `ollama ps` alone: check `nvidia-smi` memory or `selecting single GPU` lines in `%LOCALAPPDATA%\Ollama\server.log`. Always sanity-check one decision (fallback rate 0%) before a long LLM run; the populate script's Ollama check catches an unreachable server, but garbage output only shows up as fallbacks.
 - pytest gets a **fresh per-session basetemp** via `tests/conftest.py` (`mkdtemp`). Any *shared* basetemp — the default `%TEMP%\pytest-of-<user>` or a static `--basetemp` path — causes `PermissionError` on this machine when the directory was created by a different security context (Claude's sandboxed shell vs the user's shell), because pytest scans/wipes it at session start. Never reintroduce a static basetemp.
 - Anything pivoting Gold data per run must build labels that include the **run_id**, not just the config (seed/payoff): several runs can share an identical configuration (see the `run_label` cell in `notebooks/analysis.ipynb`).

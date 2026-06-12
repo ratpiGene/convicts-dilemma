@@ -29,9 +29,14 @@ uv sync                                                          # 1. install ev
 uv run pytest                                                    # 2. sanity check (29 tests)
 uv run dagster asset materialize -m convicts_dilemma.defs \
   --select "bronze_tournament,silver_rounds,int_match_results,tournament_summary,matchup_matrix,behavioral_drift,forgiveness_index,run_catalog,cross_run_summary"   # 3. full pipeline
-uv sync --group analysis
-uv run jupyter lab notebooks/analysis.ipynb                      # 4. explore the results
+uv sync --group dashboard
+uv run streamlit run app/dashboard.py                            # 4. explore the results
 ```
+
+To fill the lake with a curated set of **heterogeneous** runs (varied seeds,
+payoff matrices, horizons, rosters — what the comparative Gold models are
+for), run `uv run python scripts/populate_lake.py` (~1 min) and see the
+[data scientist guide](docs/data_scientist_guide.md).
 
 (The explicit asset list is used instead of `--select "*"` because Click
 expands `*` against the filesystem on Windows. On PowerShell, replace the
@@ -160,11 +165,18 @@ ollama pull llama3.2:3b     # ~2 GB; a 3B q4 model fits in 4 GB of VRAM
 ollama serve                # if the server isn't already running
 ```
 
-Then add personas to the roster via the run config:
+Shortcut — a curated LLM experiment (all 4 personas vs `tit_for_tat` and
+`always_defect`, fallback rate reported at the end):
+
+```bash
+uv run python scripts/populate_lake.py --llm-only
+```
+
+Or add personas to the roster of any run via the run config:
 
 ```bash
 uv run dagster asset materialize --select bronze_tournament -m convicts_dilemma.defs `
-  --config-json '{"ops": {"bronze_tournament": {"config": {"strategies": ["tit_for_tat", "always_defect", "grim_trigger", "llm_empathetic", "llm_calculating", "llm_vengeful", "llm_opportunist"], "llm_n_rounds": 100}}}}'
+  --config-json '{"ops": {"bronze_tournament": {"config": {"strategies": ["tit_for_tat", "always_defect", "grim_trigger", "llm_empathetic", "llm_calculating", "llm_vengeful", "llm_opportunist"], "llm_n_rounds": 200}}}}'
 ```
 
 How it works:
@@ -189,7 +201,34 @@ How it works:
   another model. LLM runs are reproducible best-effort only (a fixed seed
   is sent, but determinism across GPUs/Ollama versions is not guaranteed).
 
-### 6. Explore: the EDA notebook
+### 6. Explore: the Streamlit dashboard
+
+```bash
+uv sync --group dashboard         # adds streamlit + plotly + pandas
+uv run streamlit run app/dashboard.py
+```
+
+The dashboard is the interactive analyst endpoint of the lake. Like the
+notebook it consumes the **Gold layer only**: per-run leaderboard, matchup
+heatmap, behavioural drift and forgiveness-vs-performance, plus a
+**cross-run comparison** tab that plots how each strategy's rank moves
+across runs (i.e. across payoff matrices, horizons, rosters and seeds).
+It adapts live to whatever runs exist — materialise a new tournament and
+hit *Refresh data*.
+
+Comparisons are only interesting if the lake contains **heterogeneous**
+runs. Populate it with the curated 12-experiment plan (replicates,
+temptation sweep, horizon sweep, roster compositions...):
+
+```bash
+uv run python scripts/populate_lake.py
+```
+
+The [data scientist guide](docs/data_scientist_guide.md) documents every
+tunable parameter, the validity rules of the payoff matrix, and a recipe
+book for designing your own comparative experiments.
+
+### 7. Explore: the EDA notebook
 
 ```bash
 uv sync --group analysis          # adds matplotlib + jupyterlab
@@ -201,7 +240,7 @@ leaderboard, matchup heatmap, behavioural drift, forgiveness-vs-performance,
 cross-run rank comparison, and a discussion of the Nash equilibrium vs the
 emergence of cooperation. It adapts to whatever runs exist in your lake.
 
-### 7. Query the lake (analyst access)
+### 8. Query the lake (analyst access)
 
 ```python
 import duckdb
@@ -321,7 +360,10 @@ src/convicts_dilemma/
 ├── pipeline/     # bronze.py (write/scan), silver.py (Polars transform)
 └── defs/         # Dagster assets incl. dagster-dbt integration
 dbt/              # Gold models, data tests, sources over the Parquet lake
+app/              # Streamlit dashboard (Gold-only consumption)
 notebooks/        # EDA notebook (Gold-only consumption)
+scripts/          # populate_lake.py: curated heterogeneous experiment plan
+docs/             # data scientist guide (experiment design + recipe book)
 tests/            # 29 pytest tests (engine, layers, agents, dbt end-to-end)
 ```
 
